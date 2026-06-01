@@ -67,9 +67,9 @@ export default function CustomerForm() {
 
   // Table items - initialized with template rows using YOK as clear defaults
   const [items, setItems] = useState<OrderItem[]>([
-    { id: '1', no: '10', adet: 1, adiSoyadi: 'AHMET YILMAZ', ustBedeni: 'M', altBedeni: 'M', corap: 'BEYAZ' },
-    { id: '2', no: '7', adet: 1, adiSoyadi: 'MUSTAFA CAN', ustBedeni: 'L', altBedeni: 'L', corap: 'SİYAH' },
-    { id: '3', no: '1', adet: 1, adiSoyadi: 'BURAK ŞAHİN', ustBedeni: 'XL', altBedeni: 'XL', corap: 'YOK' },
+    { id: '1', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
+    { id: '2', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
+    { id: '3', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
     { id: '4', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
     { id: '5', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
   ]);
@@ -661,7 +661,7 @@ export default function CustomerForm() {
                           <button
                             type="button"
                             onClick={handleAnalyzeImageWithAI}
-                            className="bg-purple-650 hover:bg-purple-700 text-white font-bold text-xs py-2 px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-2 px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
                           >
                             <Sparkles className="w-3.5 h-3.5" />
                             Görseli AI ile Çözümle
