@@ -1,0 +1,43 @@
+{
+  "entities": {
+    "OrderItem": {
+      "title": "Order Item Details",
+      "description": "Each row represents a player uniform inside the team sheet order.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "Row item identifier" },
+        "no": { "type": "string", "description": "Forma veya şort sırt numarası" },
+        "adet": { "type": "number", "description": "Sipariş miktarı" },
+        "adiSoyadi": { "type": "string", "description": "Adı soyadı (Büyük Harflerle)" },
+        "ustBedeni": { "type": "string", "description": "Forma üst bedeni (örn: S, M, L, XL etc)" },
+        "altBedeni": { "type": "string", "description": "Şort bedeni (örn: S, M, L, XL etc)" }
+      },
+      "required": ["id", "no", "adet", "adiSoyadi", "ustBedeni", "altBedeni"]
+    },
+    "Order": {
+      "title": "Team Order Sheet",
+      "description": "Represents a complete uniform sheet created by a customer with team details and list of items.",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "description": "The custom order sheet unique code (e.g. SL-28491)" },
+        "teamName": { "type": "string", "description": "Takım Adı" },
+        "customerName": { "type": "string", "description": "Sipariş Veren Kişinin Adı" },
+        "customerPhone": { "type": "string", "description": "İrtibat Telefon Numarası" },
+        "notes": { "type": "string", "description": "Özel notlar ve sipariş detayları" },
+        "createdAt": { "type": "string", "description": "Oluşturulma tarihi ISO string" },
+        "status": {
+          "type": "string",
+          "enum": ["beklemede", "hazirlaniyor", "tamamlandi"],
+          "description": "Siparişin üretim durumu"
+        }
+      },
+      "required": ["id", "teamName", "customerName", "customerPhone"]
+    }
+  },
+  "firestore": {
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Sipariş listeleri koleksiyonu"
+    }
+  }
+}

@@ -1,0 +1,66 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    
+    // 1. Global Safety Net - Default Deny
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Helper functions for hardened rules
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // 2. Schema Validation (Anti-Update-Gap)
+    function isValidOrder(data) {
+      return data.keys().hasAll(['id', 'teamName', 'customerName', 'customerPhone', 'items', 'createdAt', 'status'])
+        && data.id is string
+        && data.id.size() <= 64
+        && data.teamName is string && data.teamName.size() <= 200
+        && data.customerName is string && data.customerName.size() <= 200
+        // Handle phone string length
+        && data.customerPhone is string && data.customerPhone.size() <= 40
+        && data.status in ['beklemede', 'hazirlaniyor', 'tamamlandi']
+        // Check items list size limit to protect memory constraints (Denial of Wallet)
+        && data.items is list && data.items.size() <= 150;
+    }
+
+    // Match block for orders collection
+    match /orders/{orderId} {
+      // Allow customers to retrieve their specific sheet via code
+      allow get: if isValidId(orderId);
+      
+      // 3. No Blanket Reads or Query Scraping: Block entire listing queries
+      allow list: if false; 
+
+      // Allow creating lists if schema complies (starts in 'beklemede')
+      allow create: if isValidId(orderId) 
+        && isValidOrder(incoming()) 
+        && incoming().id == orderId
+        && incoming().status == 'beklemede';
+
+      // Allow updating status for production workflow
+      allow update: if isValidId(orderId)
+        && isValidOrder(incoming())
+        && incoming().id == existing().id
+        && incoming().teamName == existing().teamName // Keep metadata immortal
+        && incoming().customerName == existing().customerName
+        && (
+          // Action: Shift state
+          incoming().diff(existing()).affectedKeys().hasOnly(['status'])
+        );
+      
+      // Delete disabled to protect client history
+      allow delete: if false;
+    }
+  }
+}

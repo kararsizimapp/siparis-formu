@@ -1,0 +1,6 @@
+{
+  "name": "Sipariş Listesi Formu",
+  "description": "Müşterilerin sipariş bilgilerini (forma no, adet, adı soyadı, üst/alt beden) kolayca doldurabildiği ve yöneticilerin bu verileri Excel formatında indirebildiği web tabanlı sipariş sistemi.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
