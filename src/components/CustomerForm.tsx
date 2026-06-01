@@ -19,7 +19,14 @@ import {
   CheckCircle2,
   ListOrdered,
   Shirt,
-  Scissors
+  Scissors,
+  UploadCloud,
+  Image as ImageIcon,
+  Loader2,
+  AlertCircle,
+  X,
+  FileImage,
+  RefreshCw
 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { OrderItem } from '../types';
@@ -71,6 +78,138 @@ export default function CustomerForm() {
   const [showPasteZone, setShowPasteZone] = useState(false);
   const [pasteContent, setPasteContent] = useState('');
   const [pasteError, setPasteError] = useState('');
+
+  // AI OCR States
+  const [activeTab, setActiveTab] = useState<'paste' | 'ocr'>('paste');
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [imagePreview, setImagePreview] = useState<string | null>(null);
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrError, setOcrError] = useState('');
+  const [ocrSuccessMsg, setOcrSuccessMsg] = useState('');
+  const [isDragActive, setIsDragActive] = useState(false);
+
+  const handleImageFile = (file: File) => {
+    if (!file.type.startsWith('image/')) {
+      setOcrError('Lütfen geçerli bir görsel dosyası seçin (PNG, JPG, JPEG).');
+      return;
+    }
+    setImageFile(file);
+    setOcrError('');
+    setOcrSuccessMsg('');
+
+    const reader = new FileReader();
+    reader.onloadend = () => {
+      setImagePreview(reader.result as string);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(false);
+  };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      handleImageFile(e.dataTransfer.files[0]);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (e.target.files && e.target.files[0]) {
+      handleImageFile(e.target.files[0]);
+    }
+  };
+
+  const removeSelectedImage = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    setOcrError('');
+    setOcrSuccessMsg('');
+  };
+
+  const handleAnalyzeImageWithAI = async () => {
+    if (!imagePreview) {
+      setOcrError('Lütfen önce bir oyuncu listesi fotoğrafı yükleyin.');
+      return;
+    }
+
+    setOcrLoading(true);
+    setOcrError('');
+    setOcrSuccessMsg('');
+
+    try {
+      const base64Parts = imagePreview.split(',');
+      const imageBase64 = base64Parts[1];
+      const mimeType = imageFile?.type || "image/jpeg";
+
+      const response = await fetch('/api/gemini/parse-image', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          imageBase64,
+          mimeType,
+        }),
+      });
+
+      if (!response.ok) {
+        const errData = await response.json();
+        throw new Error(errData.error || 'Yapay zeka görseli işleyemedi.');
+      }
+
+      const data = await response.json();
+      if (data && data.players && Array.isArray(data.players)) {
+        const parsedPlayers = data.players.map((p: any) => {
+          let ust = toTurkishUpperCase(p.ustBedeni || 'YOK');
+          if (!ALL_SIZES.includes(ust)) ust = 'YOK';
+
+          let alt = toTurkishUpperCase(p.altBedeni || 'YOK');
+          if (!ALL_SIZES.includes(alt)) alt = 'YOK';
+
+          let corapVal = toTurkishUpperCase(p.corap || 'YOK');
+          if (!SOCKS_OPTIONS.includes(corapVal)) corapVal = 'YOK';
+
+          return {
+            id: Math.random().toString(36).substring(2, 9),
+            no: filterNumbersOnly(p.no || '').slice(0, 3),
+            adet: typeof p.adet === 'number' && p.adet > 0 ? p.adet : 1,
+            adiSoyadi: filterPlayerName(p.adiSoyadi || ''),
+            ustBedeni: ust,
+            altBedeni: alt,
+            corap: corapVal
+          };
+        }).filter((p: any) => p.adiSoyadi.trim() !== '');
+
+        if (parsedPlayers.length === 0) {
+          setOcrError('Görselde okunabilir oyuncu bilgisi (isim vb.) bulunamadı. Lütfen listenin net olduğundan emin olun.');
+          return;
+        }
+
+        // Merge on active lines
+        const activeCurrent = items.filter(item => item.adiSoyadi.trim() !== '');
+        setItems([...activeCurrent, ...parsedPlayers]);
+        setOcrSuccessMsg(`Yapay zeka görselden ${parsedPlayers.length} oyuncuyu başarıyla listeye aktardı!`);
+        setImagePreview(null);
+        setImageFile(null);
+      } else {
+        throw new Error('Yapay zekadan geçersiz veri formatı alındı.');
+      }
+    } catch (err: any) {
+      console.error(err);
+      setOcrError(err.message || 'Görsel işlenirken bir sorun oluştu.');
+    } finally {
+      setOcrLoading(false);
+    }
+  };
 
   // Dynamic status calculates
   const totalUniformCount = items.reduce((acc, item) => acc + (Number(item.adet) || 0), 0);
@@ -345,61 +484,219 @@ export default function CustomerForm() {
               <Sparkles className="w-5 h-5 text-purple-600 animate-pulse" />
             </div>
             <div>
-              <h4 className="font-display font-bold text-sm text-slate-850">Excel veya WhatsApp'tan Kopyalayıp Yapıştır</h4>
-              <p className="text-[11px] text-slate-400 font-sans">Uzun oyuncu listelerini tek seferde aktarmak için burayı kullanın.</p>
+              <h4 className="font-display font-bold text-sm text-slate-850">Hızlı Oyuncu Ekleme & Yapay Zeka (AI) Sihirbazı</h4>
+              <p className="text-[11px] text-slate-400 font-sans">Uzun listeleri kopyalayıp yapıştırın veya listenin fotoğrafını yükleyerek AI ile aktarın.</p>
             </div>
           </div>
           <button
             type="button"
             onClick={() => setShowPasteZone(!showPasteZone)}
-            className="bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold font-sans text-xs px-4 py-2 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto select-none"
+            className="bg-purple-50 hover:bg-purple-100 text-purple-700 font-bold font-sans text-xs px-4 py-2 rounded-lg transition-all flex items-center gap-1.5 cursor-pointer self-start sm:self-auto select-none shadow-sm"
           >
             <Clipboard className="w-3.5 h-3.5" />
-            {showPasteZone ? 'Biçimi Kapat' : 'Hızlı Giriş Panelini Aç'}
+            {showPasteZone ? 'Sihirbazı Gizle' : 'Hızlı Giriş Sihirbazını Aç'}
           </button>
         </div>
 
         {showPasteZone && (
           <div className="border-t border-dashed border-slate-200 mt-4 pt-4">
-            <p className="text-xs text-slate-500 font-sans mb-3">
-              Aşağıdaki kutuya bilgileri her satıra bir oyuncu gelecek şekilde yazıp yapıştırın. Sistem girdilerinizden numara, isim, beden ve çorapları otomatik eşleştirecektir.
-              <br />
-              <span className="font-semibold text-slate-700">Örnek Format:</span> 
-              <code className="text-indigo-650 font-mono text-[10px] ml-1 bg-indigo-50 px-1.5 py-0.5 rounded">10 - AHMET YILMAZ - XL - YOK</code> veya 
-              <code className="text-indigo-650 font-mono text-[10px] ml-1 bg-indigo-50 px-1.5 py-0.5 rounded">7, MUSTAFA CAN, M, L, SİYAH</code>
-            </p>
             
-            <textarea
-              rows={4}
-              placeholder="📋 Örnek:&#10;10 - HAKAN SANSAL - XL - YOK - SİYAH&#10;7 - SABRİ GÜNEL - 5XL - YOK - GRİ&#10;1 - RÜŞTÜ ARSLAN - XXL - XL - BEYAZ"
-              value={pasteContent}
-              onChange={(e) => setPasteContent(e.target.value)}
-              className="w-full bg-slate-50 font-mono text-xs border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:bg-white transition-all placeholder:text-slate-400 placeholder:text-xs"
-            />
-            
-            {pasteError && (
-              <p className="text-[11px] text-red-500 font-medium mt-1 uppercase">{pasteError}</p>
-            )}
-
-            <div className="flex justify-end gap-2 mt-3">
+            {/* TAB SELECTOR */}
+            <div className="flex border-b border-slate-100 mb-4 gap-2">
               <button
                 type="button"
-                onClick={() => {
-                  setShowPasteZone(false);
-                  setPasteError('');
-                }}
-                className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
+                onClick={() => setActiveTab('paste')}
+                className={`pb-2 px-4 text-xs font-bold transition-all border-b-2 cursor-pointer ${
+                  activeTab === 'paste' 
+                    ? 'border-purple-600 text-purple-700 font-extrabold' 
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
               >
-                İptal
+                📋 Metin Kopyala-Yapıştır
               </button>
               <button
                 type="button"
-                onClick={handleParsePaste}
-                className="bg-purple-600 hover:bg-purple-700 text-white font-sans text-xs font-bold px-4 py-1.5 rounded-lg transition-all cursor-pointer"
+                onClick={() => setActiveTab('ocr')}
+                className={`pb-2 px-4 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
+                  activeTab === 'ocr' 
+                    ? 'border-purple-600 text-purple-700 font-extrabold' 
+                    : 'border-transparent text-slate-400 hover:text-slate-600'
+                }`}
               >
-                Kayıtları Ayrıştır ve Ekle
+                📸 Fotoğraf / Liste Resmi Yükle
+                <span className="bg-purple-100 text-purple-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded leading-none uppercase animate-pulse">AYRIŞTICI</span>
               </button>
             </div>
+
+            {ocrSuccessMsg && (
+              <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs rounded-xl p-3.5 mb-4 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                <span className="font-semibold">{ocrSuccessMsg}</span>
+              </div>
+            )}
+
+            {/* TAB 1: PASTE CONTENT */}
+            {activeTab === 'paste' && (
+              <div>
+                <p className="text-xs text-slate-500 font-sans mb-3">
+                  Aşağıdaki kutuya bilgileri her satıra bir oyuncu gelecek şekilde yazıp yapıştırın. Sistem girdilerinizden numara, isim, beden ve çorapları otomatik eşleştirecektir.
+                  <br />
+                  <span className="font-semibold text-slate-700">Örnek Format:</span> 
+                  <code className="text-indigo-650 font-mono text-[10px] ml-1 bg-indigo-50 px-1.5 py-0.5 rounded">10 - AHMET YILMAZ - XL - YOK</code> veya 
+                  <code className="text-indigo-650 font-mono text-[10px] ml-1 bg-indigo-50 px-1.5 py-0.5 rounded">7, MUSTAFA CAN, M, L, SİYAH</code>
+                </p>
+                
+                <textarea
+                  rows={4}
+                  placeholder="📋 Örnek:&#10;10 - HAKAN SANSAL - XL - YOK - SİYAH&#10;7 - SABRİ GÜNEL - 5XL - YOK - GRİ&#10;1 - RÜŞTÜ ARSLAN - XXL - XL - BEYAZ"
+                  value={pasteContent}
+                  onChange={(e) => setPasteContent(e.target.value)}
+                  className="w-full bg-slate-50 font-mono text-xs border border-slate-200 rounded-xl p-3 focus:outline-none focus:ring-2 focus:ring-purple-500 focus:bg-white transition-all placeholder:text-slate-400 placeholder:text-xs"
+                />
+                
+                {pasteError && (
+                  <p className="text-[11px] text-red-500 font-medium mt-1 uppercase">{pasteError}</p>
+                )}
+
+                <div className="flex justify-end gap-2 mt-3">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPasteZone(false);
+                      setPasteError('');
+                    }}
+                    className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer"
+                  >
+                    İptal
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleParsePaste}
+                    className="bg-purple-600 hover:bg-purple-700 text-white font-sans text-xs font-bold px-4 py-1.5 rounded-lg transition-all cursor-pointer"
+                  >
+                    Kayıtları Ayrıştır ve Ekle
+                  </button>
+                </div>
+              </div>
+            )}
+
+            {/* TAB 2: AI OCR CONTENT */}
+            {activeTab === 'ocr' && (
+              <div>
+                <p className="text-xs text-slate-500 font-sans mb-3">
+                  Müşterinizin gönderdiği kağıt listenin, defter sayfasının veya WhatsApp/Excel ekran görüntüsünün net bir fotoğrafını yükleyin. Yapay zeka listedeki oyuncuları, numaraları ve kıyafeti, hatta yazılan bedenleri otomatik olarak çözümleyip aşağıdaki listeye ekleyecektir.
+                </p>
+
+                {!imagePreview ? (
+                  <div
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                    className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
+                      isDragActive 
+                        ? 'border-purple-600 bg-purple-50' 
+                        : 'border-slate-200 hover:border-purple-400 bg-slate-50 hover:bg-slate-100/50'
+                    }`}
+                    onClick={() => document.getElementById('ocr-file-input')?.click()}
+                  >
+                    <input
+                      id="ocr-file-input"
+                      type="file"
+                      accept="image/*"
+                      onChange={handleFileChange}
+                      className="hidden"
+                    />
+                    <UploadCloud className="w-10 h-10 text-purple-400 mx-auto mb-3 animate-bounce" />
+                    <span className="block text-xs font-bold text-slate-700 mb-1">
+                      Fotoğrafı Sürükleyip Bırakın veya Bilgisayardan Seçin
+                    </span>
+                    <span className="block text-[10px] text-slate-400 font-sans">
+                      PNG, JPG, JPEG (Maksimum 10 MB)
+                    </span>
+                  </div>
+                ) : (
+                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="relative rounded-lg overflow-hidden border border-slate-200 bg-white shadow-sm flex items-center justify-center p-2 min-h-[180px]">
+                      <img 
+                        src={imagePreview} 
+                        alt="Yüklenen Rapor Görseli" 
+                        className="max-h-48 object-contain rounded"
+                      />
+                      <button
+                        type="button"
+                        onClick={removeSelectedImage}
+                        disabled={ocrLoading}
+                        className="absolute top-2 right-2 bg-red-600 hover:bg-red-700 text-white rounded-full p-1.5 transition-all shadow cursor-pointer disabled:opacity-55"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+
+                    <div className="flex flex-col justify-center space-y-3 p-2">
+                      <div className="flex items-center gap-2 text-slate-700 text-xs">
+                        <FileImage className="w-5 h-5 text-purple-600" />
+                        <div>
+                          <p className="font-bold truncate max-w-[200px]">{imageFile?.name || 'Seçilen_Görsel.jpg'}</p>
+                          <p className="text-[10px] text-slate-400 font-sans">Boyut: {imageFile ? `${(imageFile.size / 1024 / 1024).toFixed(2)} MB` : '-'}</p>
+                        </div>
+                      </div>
+
+                      {ocrLoading ? (
+                        <div className="bg-purple-50 text-purple-800 text-[11px] rounded-lg p-3 border border-purple-100 flex items-center gap-2.5 animate-pulse">
+                          <Loader2 className="w-4 h-4 text-purple-600 animate-spin shrink-0" />
+                          <div>
+                            <p className="font-bold">Yapay Zeka Görseli Çözümlüyor...</p>
+                            <p className="text-[10px] text-slate-500 font-sans mt-0.5">Yüklenen görsel analiz ediliyor ve oyuncu listesi çıkarılıyor. Bu işlem birkaç saniye sürebilir.</p>
+                          </div>
+                        </div>
+                      ) : (
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={removeSelectedImage}
+                            className="bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs py-2 px-4 rounded-lg border border-slate-200 transition-all cursor-pointer shadow-sm"
+                          >
+                            Temizle
+                          </button>
+                          <button
+                            type="button"
+                            onClick={handleAnalyzeImageWithAI}
+                            className="bg-purple-650 hover:bg-purple-700 text-white font-bold text-xs py-2 px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
+                          >
+                            <Sparkles className="w-3.5 h-3.5" />
+                            Görseli AI ile Çözümle
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {ocrError && (
+                  <div className="bg-red-50 border border-red-100 text-red-800 text-xs rounded-xl p-3.5 mt-3 flex items-start gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-650 shrink-0 mt-0.5" />
+                    <div>
+                      <p className="font-bold uppercase tracking-wider text-[10px]">İşlem Başarısız</p>
+                      <p className="font-medium mt-0.5 text-slate-700">{ocrError}</p>
+                    </div>
+                  </div>
+                )}
+
+                <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-dashed border-slate-100">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setShowPasteZone(false);
+                      removeSelectedImage();
+                    }}
+                    disabled={ocrLoading}
+                    className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer disabled:opacity-55"
+                  >
+                    İptal
+                  </button>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>
