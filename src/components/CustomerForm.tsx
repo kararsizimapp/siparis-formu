@@ -74,142 +74,156 @@ export default function CustomerForm() {
     { id: '5', no: '', adet: 1, adiSoyadi: '', ustBedeni: 'YOK', altBedeni: 'YOK', corap: 'YOK' },
   ]);
 
-  // Bulk paste drawer state
+  // Hızlı Giriş Sihirbazı state
   const [showPasteZone, setShowPasteZone] = useState(false);
   const [pasteContent, setPasteContent] = useState('');
   const [pasteError, setPasteError] = useState('');
 
-  // AI OCR States
-  const [activeTab, setActiveTab] = useState<'paste' | 'ocr'>('paste');
-  const [imageFile, setImageFile] = useState<File | null>(null);
-  const [imagePreview, setImagePreview] = useState<string | null>(null);
-  const [ocrLoading, setOcrLoading] = useState(false);
-  const [ocrError, setOcrError] = useState('');
-  const [ocrSuccessMsg, setOcrSuccessMsg] = useState('');
-  const [isDragActive, setIsDragActive] = useState(false);
+  // Excel ve Hızlı Yükleme Tab Seçimi
+  const [activeTab, setActiveTab] = useState<'paste' | 'excel'>('paste');
+  const [excelError, setExcelError] = useState('');
+  const [excelSuccess, setExcelSuccess] = useState('');
 
-  const handleImageFile = (file: File) => {
-    if (!file.type.startsWith('image/')) {
-      setOcrError('Lütfen geçerli bir görsel dosyası seçin (PNG, JPG, JPEG).');
-      return;
-    }
-    setImageFile(file);
-    setOcrError('');
-    setOcrSuccessMsg('');
+  // Excel'den İçe Aktar
+  const handleExcelImport = (e: React.ChangeEvent<HTMLInputElement>) => {
+    if (!e.target.files || !e.target.files[0]) return;
+    const file = e.target.files[0];
+    setExcelError('');
+    setExcelSuccess('');
 
     const reader = new FileReader();
-    reader.onloadend = () => {
-      setImagePreview(reader.result as string);
-    };
-    reader.readAsDataURL(file);
-  };
-
-  const handleDragOver = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragActive(true);
-  };
-
-  const handleDragLeave = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragActive(false);
-  };
-
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragActive(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      handleImageFile(e.dataTransfer.files[0]);
-    }
-  };
-
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      handleImageFile(e.target.files[0]);
-    }
-  };
-
-  const removeSelectedImage = () => {
-    setImageFile(null);
-    setImagePreview(null);
-    setOcrError('');
-    setOcrSuccessMsg('');
-  };
-
-  const handleAnalyzeImageWithAI = async () => {
-    if (!imagePreview) {
-      setOcrError('Lütfen önce bir oyuncu listesi fotoğrafı yükleyin.');
-      return;
-    }
-
-    setOcrLoading(true);
-    setOcrError('');
-    setOcrSuccessMsg('');
-
-    try {
-      const base64Parts = imagePreview.split(',');
-      const imageBase64 = base64Parts[1];
-      const mimeType = imageFile?.type || "image/jpeg";
-
-      const response = await fetch('/api/gemini/parse-image', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          imageBase64,
-          mimeType,
-        }),
-      });
-
-      if (!response.ok) {
-        const errData = await response.json();
-        throw new Error(errData.error || 'Yapay zeka görseli işleyemedi.');
-      }
-
-      const data = await response.json();
-      if (data && data.players && Array.isArray(data.players)) {
-        const parsedPlayers = data.players.map((p: any) => {
-          let ust = toTurkishUpperCase(p.ustBedeni || 'YOK');
-          if (!ALL_SIZES.includes(ust)) ust = 'YOK';
-
-          let alt = toTurkishUpperCase(p.altBedeni || 'YOK');
-          if (!ALL_SIZES.includes(alt)) alt = 'YOK';
-
-          let corapVal = toTurkishUpperCase(p.corap || 'YOK');
-          if (!SOCKS_OPTIONS.includes(corapVal)) corapVal = 'YOK';
-
-          return {
-            id: Math.random().toString(36).substring(2, 9),
-            no: filterNumbersOnly(p.no || '').slice(0, 3),
-            adet: typeof p.adet === 'number' && p.adet > 0 ? p.adet : 1,
-            adiSoyadi: filterPlayerName(p.adiSoyadi || ''),
-            ustBedeni: ust,
-            altBedeni: alt,
-            corap: corapVal
-          };
-        }).filter((p: any) => p.adiSoyadi.trim() !== '');
-
-        if (parsedPlayers.length === 0) {
-          setOcrError('Görselde okunabilir oyuncu bilgisi (isim vb.) bulunamadı. Lütfen listenin net olduğundan emin olun.');
+    reader.onload = (evt) => {
+      try {
+        const bstr = evt.target?.result;
+        const workbook = XLSX.read(bstr, { type: 'binary' });
+        const sheetName = workbook.SheetNames[0];
+        const worksheet = workbook.Sheets[sheetName];
+        const rawJson: any[] = XLSX.utils.sheet_to_json(worksheet, { header: 1 });
+        
+        if (rawJson.length < 1) {
+          setExcelError('Yüklenen Excel dosyası boş veya okunamadı.');
           return;
         }
 
-        // Merge on active lines
+        let headerIndex = -1;
+        let colMap = { name: -1, no: -1, ust: -1, alt: -1, corap: -1 };
+
+        // İlk 10 satırı başlık satırı bulmak için ara
+        for (let r = 0; r < Math.min(rawJson.length, 10); r++) {
+          const row = rawJson[r];
+          if (!row || !Array.isArray(row)) continue;
+          
+          let matches = 0;
+          let tempMap = { name: -1, no: -1, ust: -1, alt: -1, corap: -1 };
+          
+          for (let c = 0; c < row.length; c++) {
+            const val = String(row[c] || '').toLowerCase().trim();
+            if (val.includes('ad') || val.includes('isim') || val.includes('oyuncu') || val.includes('soyad')) {
+              tempMap.name = c;
+              matches++;
+            } else if (val === 'no' || val === 'numara' || val.includes('sırt') || val === 'no' || val === 'forma') {
+              tempMap.no = c;
+              matches++;
+            } else if (val.includes('üst') || val === 'beden' || (val.includes('beden') && !val.includes('alt'))) {
+              tempMap.ust = c;
+              matches++;
+            } else if (val.includes('alt') || val.includes('şort') || val.includes('sort')) {
+              tempMap.alt = c;
+              matches++;
+            } else if (val.includes('çorap') || val.includes('corap')) {
+              tempMap.corap = c;
+              matches++;
+            }
+          }
+          
+          if (matches >= 1) {
+            headerIndex = r;
+            colMap = tempMap;
+            break;
+          }
+        }
+
+        const startIndex = headerIndex !== -1 ? headerIndex + 1 : 0;
+        const parsedPlayers: OrderItem[] = [];
+
+        for (let i = startIndex; i < rawJson.length; i++) {
+          const row = rawJson[i];
+          if (!row || row.length === 0) continue;
+
+          let no = '';
+          let name = '';
+          let ust = 'YOK';
+          let alt = 'YOK';
+          let corapVal = 'YOK';
+
+          if (headerIndex !== -1) {
+            if (colMap.no !== -1 && row[colMap.no] !== undefined) no = String(row[colMap.no] || '').trim();
+            if (colMap.name !== -1 && row[colMap.name] !== undefined) name = String(row[colMap.name] || '').trim();
+            if (colMap.ust !== -1 && row[colMap.ust] !== undefined) ust = toTurkishUpperCase(String(row[colMap.ust] || 'YOK')).trim();
+            if (colMap.alt !== -1 && row[colMap.alt] !== undefined) alt = toTurkishUpperCase(String(row[colMap.alt] || 'YOK')).trim();
+            if (colMap.corap !== -1 && row[colMap.corap] !== undefined) corapVal = toTurkishUpperCase(String(row[colMap.corap] || 'YOK')).trim();
+          } else {
+            // Kolon başlığı bulunamadıysa ardışık tahmin et
+            if (row.length === 1) {
+              name = String(row[0] || '').trim();
+            } else if (row.length === 2) {
+              no = String(row[0] || '').trim();
+              name = String(row[1] || '').trim();
+            } else if (row.length >= 3) {
+              no = String(row[0] || '').trim();
+              name = String(row[1] || '').trim();
+              ust = toTurkishUpperCase(String(row[2] || 'YOK')).trim();
+              if (row.length >= 4) {
+                alt = toTurkishUpperCase(String(row[3] || 'YOK')).trim();
+              }
+              if (row.length >= 5) {
+                corapVal = toTurkishUpperCase(String(row[4] || 'YOK')).trim();
+              }
+            }
+          }
+
+          // Filtrele ve temizle
+          no = filterNumbersOnly(no).slice(0, 3);
+          name = filterPlayerName(name);
+          if (!ALL_SIZES.includes(ust)) ust = 'YOK';
+          if (!ALL_SIZES.includes(alt)) alt = 'YOK';
+          if (!SOCKS_OPTIONS.includes(corapVal)) corapVal = 'YOK';
+
+          const isHeaderSelf = name === 'OYUNCU ADI SOYADI' || name === 'ADI SOYADI' || name === 'OYUNCU';
+
+          if (name && !isHeaderSelf) {
+            parsedPlayers.push({
+              id: Math.random().toString(36).substring(2, 9),
+              no,
+              adet: 1,
+              adiSoyadi: name,
+              ustBedeni: ust,
+              altBedeni: alt,
+              corap: corapVal
+            });
+          }
+        }
+
+        if (parsedPlayers.length === 0) {
+          setExcelError('Excel dosyasında geçerli oyuncu ad soyadı bilgisi bulunamadı.');
+          return;
+        }
+
         const activeCurrent = items.filter(item => item.adiSoyadi.trim() !== '');
         setItems([...activeCurrent, ...parsedPlayers]);
-        setOcrSuccessMsg(`Yapay zeka görselden ${parsedPlayers.length} oyuncuyu başarıyla listeye aktardı!`);
-        setImagePreview(null);
-        setImageFile(null);
-      } else {
-        throw new Error('Yapay zekadan geçersiz veri formatı alındı.');
+        setExcelSuccess(`Excel'den ${parsedPlayers.length} oyuncu başarıyla listeye aktarıldı!`);
+        e.target.value = '';
+      } catch (err: any) {
+        setExcelError('Excel dosyası çözümlenirken hata oluştu: ' + err.message);
       }
-    } catch (err: any) {
-      console.error(err);
-      setOcrError(err.message || 'Görsel işlenirken bir sorun oluştu.');
-    } finally {
-      setOcrLoading(false);
-    }
+    };
+    reader.readAsBinaryString(file);
   };
+
+  // Mükerrer (aynı) forma numaralarını tespit et
+  const duplicateNumbers = items
+    .map(item => item.no.trim())
+    .filter((no, idx, arr) => no !== '' && arr.indexOf(no) !== idx);
 
   // Dynamic status calculates
   const totalUniformCount = items.reduce((acc, item) => acc + (Number(item.adet) || 0), 0);
@@ -480,12 +494,12 @@ export default function CustomerForm() {
       <div className="bg-white rounded-2xl border border-slate-200 shadow-sm p-5">
         <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
           <div className="flex items-center gap-3">
-            <div className="bg-purple-50 text-purple-650 p-2.5 rounded-lg shrink-0">
-              <Sparkles className="w-5 h-5 text-purple-600 animate-pulse" />
+            <div className="bg-purple-50 text-purple-750 p-2.5 rounded-lg shrink-0">
+              <Clipboard className="w-5 h-5 text-purple-600 animate-pulse" />
             </div>
             <div>
-              <h4 className="font-display font-bold text-sm text-slate-850">Hızlı Oyuncu Ekleme & Yapay Zeka (AI) Sihirbazı</h4>
-              <p className="text-[11px] text-slate-400 font-sans">Uzun listeleri kopyalayıp yapıştırın veya listenin fotoğrafını yükleyerek AI ile aktarın.</p>
+              <h4 className="font-display font-bold text-sm text-slate-850">Hızlı Oyuncu Ekleme & Liste Yükleme Sihirbazı</h4>
+              <p className="text-[11px] text-slate-400 font-sans">Uzun oyuncu listelerini kopyalayıp yapıştırın veya müşterinizin gönderdiği Excel dosyasını yükleyin.</p>
             </div>
           </div>
           <button
@@ -499,10 +513,10 @@ export default function CustomerForm() {
         </div>
 
         {showPasteZone && (
-          <div className="border-t border-dashed border-slate-200 mt-4 pt-4">
+          <div className="border-t border-dashed border-slate-200 mt-4 pt-4 space-y-5">
             
             {/* TAB SELECTOR */}
-            <div className="flex border-b border-slate-100 mb-4 gap-2">
+            <div className="flex border-b border-slate-100 pb-1 gap-2">
               <button
                 type="button"
                 onClick={() => setActiveTab('paste')}
@@ -516,24 +530,17 @@ export default function CustomerForm() {
               </button>
               <button
                 type="button"
-                onClick={() => setActiveTab('ocr')}
+                onClick={() => setActiveTab('excel')}
                 className={`pb-2 px-4 text-xs font-bold transition-all border-b-2 cursor-pointer flex items-center gap-1.5 ${
-                  activeTab === 'ocr' 
+                  activeTab === 'excel' 
                     ? 'border-purple-600 text-purple-700 font-extrabold' 
                     : 'border-transparent text-slate-400 hover:text-slate-600'
                 }`}
               >
-                📸 Fotoğraf / Liste Resmi Yükle
-                <span className="bg-purple-100 text-purple-700 text-[9px] font-extrabold px-1.5 py-0.5 rounded leading-none uppercase animate-pulse">AYRIŞTICI</span>
+                🟢 Excel / CSV Dosyası Yükle
+                <span className="bg-emerald-100 text-emerald-800 text-[9px] font-extrabold px-1.5 py-0.5 rounded leading-none">PRATİK</span>
               </button>
             </div>
-
-            {ocrSuccessMsg && (
-              <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs rounded-xl p-3.5 mb-4 flex items-center gap-2">
-                <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span className="font-semibold">{ocrSuccessMsg}</span>
-              </div>
-            )}
 
             {/* TAB 1: PASTE CONTENT */}
             {activeTab === 'paste' && (
@@ -580,126 +587,60 @@ export default function CustomerForm() {
               </div>
             )}
 
-            {/* TAB 2: AI OCR CONTENT */}
-            {activeTab === 'ocr' && (
-              <div>
-                <p className="text-xs text-slate-500 font-sans mb-3">
-                  Müşterinizin gönderdiği kağıt listenin, defter sayfasının veya WhatsApp/Excel ekran görüntüsünün net bir fotoğrafını yükleyin. Yapay zeka listedeki oyuncuları, numaraları ve kıyafeti, hatta yazılan bedenleri otomatik olarak çözümleyip aşağıdaki listeye ekleyecektir.
+            {/* TAB 2: EXCEL IMPORT CONTENT */}
+            {activeTab === 'excel' && (
+              <div className="space-y-3">
+                <p className="text-xs text-slate-500 font-sans">
+                  Müşterinizden gelen sipariş tablosunu (Excel veya CSV) doğrudan buraya yükleyin. Sütun başlıkları otomatik olarak taranacak (Oyuncu Adı, Sırt Numarası, Üst Beden, Alt Beden, Çorap) ve saniyeler içinde bütün liste aşağıdaki tabloya eklenecektir.
                 </p>
 
-                {!imagePreview ? (
-                  <div
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                    className={`border-2 border-dashed rounded-2xl p-8 text-center transition-all cursor-pointer ${
-                      isDragActive 
-                        ? 'border-purple-600 bg-purple-50' 
-                        : 'border-slate-200 hover:border-purple-400 bg-slate-50 hover:bg-slate-100/50'
-                    }`}
-                    onClick={() => document.getElementById('ocr-file-input')?.click()}
-                  >
-                    <input
-                      id="ocr-file-input"
-                      type="file"
-                      accept="image/*"
-                      onChange={handleFileChange}
-                      className="hidden"
+                <div className="flex items-center gap-4 bg-slate-50 p-4 rounded-xl border border-slate-200">
+                  <div className="flex-grow">
+                    <label className="block text-xs font-bold text-slate-700 mb-1">Excel veya CSV Dosyası Seçin</label>
+                    <input 
+                      type="file" 
+                      accept=".xlsx, .xls, .csv" 
+                      onChange={handleExcelImport}
+                      className="block w-full text-xs text-slate-500 file:mr-4 file:py-1.5 file:px-3 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-purple-50 file:text-purple-700 hover:file:bg-purple-100 cursor-pointer"
                     />
-                    <UploadCloud className="w-10 h-10 text-purple-400 mx-auto mb-3 animate-bounce" />
-                    <span className="block text-xs font-bold text-slate-700 mb-1">
-                      Fotoğrafı Sürükleyip Bırakın veya Bilgisayardan Seçin
-                    </span>
-                    <span className="block text-[10px] text-slate-400 font-sans">
-                      PNG, JPG, JPEG (Maksimum 10 MB)
-                    </span>
                   </div>
-                ) : (
-                  <div className="bg-slate-50 rounded-xl p-4 border border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="relative rounded-lg overflow-hidden border border-slate-200 bg-white shadow-sm flex items-center justify-center p-2 min-h-[180px]">
-                      <img 
-                        src={imagePreview} 
-                        alt="Yüklenen Rapor Görseli" 
-                        className="max-h-48 object-contain rounded"
-                      />
-                      <button
-                        type="button"
-                        onClick={removeSelectedImage}
-                        disabled={ocrLoading}
-                        className="absolute top-2 right-2 bg-red-600 hover:bg-red-700 text-white rounded-full p-1.5 transition-all shadow cursor-pointer disabled:opacity-55"
-                      >
-                        <X className="w-3.5 h-3.5" />
-                      </button>
-                    </div>
-
-                    <div className="flex flex-col justify-center space-y-3 p-2">
-                      <div className="flex items-center gap-2 text-slate-700 text-xs">
-                        <FileImage className="w-5 h-5 text-purple-600" />
-                        <div>
-                          <p className="font-bold truncate max-w-[200px]">{imageFile?.name || 'Seçilen_Görsel.jpg'}</p>
-                          <p className="text-[10px] text-slate-400 font-sans">Boyut: {imageFile ? `${(imageFile.size / 1024 / 1024).toFixed(2)} MB` : '-'}</p>
-                        </div>
-                      </div>
-
-                      {ocrLoading ? (
-                        <div className="bg-purple-50 text-purple-800 text-[11px] rounded-lg p-3 border border-purple-100 flex items-center gap-2.5 animate-pulse">
-                          <Loader2 className="w-4 h-4 text-purple-600 animate-spin shrink-0" />
-                          <div>
-                            <p className="font-bold">Yapay Zeka Görseli Çözümlüyor...</p>
-                            <p className="text-[10px] text-slate-500 font-sans mt-0.5">Yüklenen görsel analiz ediliyor ve oyuncu listesi çıkarılıyor. Bu işlem birkaç saniye sürebilir.</p>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={removeSelectedImage}
-                            className="bg-white hover:bg-slate-100 text-slate-700 font-semibold text-xs py-2 px-4 rounded-lg border border-slate-200 transition-all cursor-pointer shadow-sm"
-                          >
-                            Temizle
-                          </button>
-                          <button
-                            type="button"
-                            onClick={handleAnalyzeImageWithAI}
-                            className="bg-purple-600 hover:bg-purple-700 text-white font-bold text-xs py-2 px-4 rounded-lg transition-all shadow-md flex items-center gap-1.5 cursor-pointer"
-                          >
-                            <Sparkles className="w-3.5 h-3.5" />
-                            Görseli AI ile Çözümle
-                          </button>
-                        </div>
-                      )}
-                    </div>
+                  <div className="bg-emerald-50 text-emerald-800 p-2.5 rounded-xl border border-emerald-150 shrink-0 hidden sm:block">
+                    <FileSpreadsheet className="w-6 h-6 text-emerald-600" />
                   </div>
-                )}
-
-                {ocrError && (
-                  <div className="bg-red-50 border border-red-100 text-red-800 text-xs rounded-xl p-3.5 mt-3 flex items-start gap-2">
-                    <AlertCircle className="w-4 h-4 text-red-650 shrink-0 mt-0.5" />
-                    <div>
-                      <p className="font-bold uppercase tracking-wider text-[10px]">İşlem Başarısız</p>
-                      <p className="font-medium mt-0.5 text-slate-700">{ocrError}</p>
-                    </div>
-                  </div>
-                )}
-
-                <div className="flex justify-end gap-2 mt-4 pt-3 border-t border-dashed border-slate-100">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setShowPasteZone(false);
-                      removeSelectedImage();
-                    }}
-                    disabled={ocrLoading}
-                    className="px-3 py-1.5 text-xs text-slate-500 hover:text-slate-700 cursor-pointer disabled:opacity-55"
-                  >
-                    İptal
-                  </button>
                 </div>
+
+                {excelSuccess && (
+                  <div className="bg-emerald-50 border border-emerald-100 text-emerald-800 text-xs rounded-xl p-3 flex items-center gap-2">
+                    <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                    <span className="font-semibold">{excelSuccess}</span>
+                  </div>
+                )}
+
+                {excelError && (
+                  <div className="bg-red-50 border border-red-100 text-red-800 text-xs rounded-xl p-3 flex items-center gap-2">
+                    <AlertCircle className="w-4 h-4 text-red-650 shrink-0" />
+                    <span className="font-semibold">{excelError}</span>
+                  </div>
+                )}
               </div>
             )}
+
           </div>
         )}
       </div>
+
+      {/* DUPLICATE NUMBERS ALERTER */}
+      {duplicateNumbers.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 text-amber-900 text-xs rounded-2xl p-4 flex items-start gap-3 shadow-sm animate-pulse">
+          <AlertCircle className="w-5 h-5 text-amber-600 shrink-0 mt-0.5" />
+          <div className="space-y-1">
+            <h5 className="font-bold uppercase tracking-wider text-[10px] text-amber-850">Mükerrer (Çift) Numara Uyarısı</h5>
+            <p className="font-medium text-slate-700">
+              Dikkat! <span className="font-bold text-amber-950 font-mono">{[...new Set(duplicateNumbers)].join(', ')}</span> numaralı formalar birden fazla oyuncuya atanmış durumda. İmalatta çift baskı hatası olmaması için numaraları kontrol etmenizi tavsiye ederiz.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* MAIN DATA GRID TABLE - SLEEK INTERFACE THEME */}
       <div className="bg-white rounded-2xl border border-slate-200 shadow-md overflow-hidden">
@@ -777,17 +718,21 @@ export default function CustomerForm() {
                       {(index + 1).toString().padStart(2, '0')}
                     </td>
 
-                    {/* Uniform Back Number (NO) */}
-                    <td className="border-r border-slate-150 p-1 text-center bg-transparent">
-                      <input
-                        type="text"
-                        placeholder="10"
-                        value={item.no}
-                        maxLength={3}
-                        onChange={(e) => handleItemChange(item.id, 'no', e.target.value)}
-                        className="w-full bg-slate-50/40 hover:bg-slate-100/55 focus:bg-white text-center text-slate-900 font-bold font-mono py-2 rounded focus:outline-none focus:ring-2 focus:ring-indigo-500 border-0 text-sm"
-                      />
-                    </td>
+                     {/* Uniform Back Number (NO) */}
+                     <td className="border-r border-slate-150 p-1 text-center bg-transparent">
+                       <input
+                         type="text"
+                         placeholder="10"
+                         value={item.no}
+                         maxLength={3}
+                         onChange={(e) => handleItemChange(item.id, 'no', e.target.value)}
+                         className={`w-full text-center font-bold font-mono py-2 rounded focus:outline-none focus:ring-2 border-0 text-sm transition-all ${
+                           item.no && duplicateNumbers.includes(item.no.trim())
+                             ? 'bg-amber-150 text-amber-950 focus:bg-white focus:ring-amber-500 placeholder:text-amber-700/60 ring-2 ring-amber-300'
+                             : 'bg-slate-50/40 hover:bg-slate-100/55 focus:bg-white text-slate-900 focus:ring-indigo-500'
+                         }`}
+                       />
+                     </td>
 
                     {/* Order Volume Quantity (ADET) */}
                     <td className="border-r border-slate-150 p-1 text-center bg-transparent">

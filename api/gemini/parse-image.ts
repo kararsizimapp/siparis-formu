@@ -33,6 +33,11 @@ export default async function handler(req: any, res: any) {
 
     const ai = new GoogleGenAI({
       apiKey: apiKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        }
+      }
     });
 
     const imagePart = {
@@ -53,48 +58,70 @@ Your job is to analyze the uploaded image of player lists or orders (which could
 
 Act strictly on what you find. Analyze the text or tables in the image carefully, even if handwritten. Convert correctly. Return as a clean JSON list of players.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-3.5-flash",
-      contents: [
-        imagePart,
-        { text: "Extract any and all player orders from this image in structured JSON format according to the schema." }
-      ],
-      config: {
-        systemInstruction: systemInstruction,
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            players: {
-              type: Type.ARRAY,
-              items: {
+    const tryModels = ["gemini-2.5-flash", "gemini-3.5-flash", "gemini-3.1-flash-lite", "gemini-flash-latest"];
+    let lastError: any = null;
+    let textResult = "";
+
+    for (const modelName of tryModels) {
+      for (let attempt = 1; attempt <= 1; attempt++) {
+        try {
+          console.log(`Analyzing image with model ${modelName} on Vercel...`);
+          const response = await ai.models.generateContent({
+            model: modelName,
+            contents: [
+              imagePart,
+              { text: "Extract any and all player orders from this image in structured JSON format according to the schema." }
+            ],
+            config: {
+              systemInstruction: systemInstruction,
+              responseMimeType: "application/json",
+              responseSchema: {
                 type: Type.OBJECT,
                 properties: {
-                  no: { type: Type.STRING, description: "Jersey number like 10, 7 or empty string if not found." },
-                  adet: { type: Type.INTEGER, description: "Order quantity, default is 1 if not stated." },
-                  adiSoyadi: { type: Type.STRING, description: "Name and surname in uppercase with Turkish characters preserved." },
-                  ustBedeni: { type: Type.STRING, description: "Shirt size like M, L, XL or YOK if blank or not ordered." },
-                  altBedeni: { type: Type.STRING, description: "Shorts size like M, L, XL or YOK if blank or not ordered." },
-                  corap: { type: Type.STRING, description: "Socks color or YOK." }
+                  players: {
+                    type: Type.ARRAY,
+                    items: {
+                      type: Type.OBJECT,
+                      properties: {
+                        no: { type: Type.STRING, description: "Jersey number like 10, 7 or empty string if not found." },
+                        adet: { type: Type.INTEGER, description: "Order quantity, default is 1 if not stated." },
+                        adiSoyadi: { type: Type.STRING, description: "Name and surname in uppercase with Turkish characters preserved." },
+                        ustBedeni: { type: Type.STRING, description: "Shirt size like M, L, XL or YOK if blank or not ordered." },
+                        altBedeni: { type: Type.STRING, description: "Shorts size like M, L, XL or YOK if blank or not ordered." },
+                        corap: { type: Type.STRING, description: "Socks color or YOK." }
+                      },
+                      required: ["no", "adet", "adiSoyadi", "ustBedeni", "altBedeni", "corap"]
+                    }
+                  }
                 },
-                required: ["no", "adet", "adiSoyadi", "ustBedeni", "altBedeni", "corap"]
+                required: ["players"]
               }
             }
-          },
-          required: ["players"]
+          });
+
+          textResult = response.text || "";
+          if (textResult && textResult.trim()) {
+            // Attempt to parse to verify correctness
+            const parsed = JSON.parse(textResult.trim());
+            return res.status(200).json(parsed);
+          }
+        } catch (err: any) {
+          console.error(`Vercel attempt with ${modelName} failed:`, err.message || err);
+          lastError = err;
         }
       }
-    });
-
-    const textResult = response.text;
-    if (!textResult) {
-      return res.status(500).json({ error: "Yapay zeka görselden metin okuyamadı veya boş sonuç döndü." });
     }
 
-    const parsedData = JSON.parse(textResult.trim());
-    return res.status(200).json(parsedData);
+    const errStr = lastError?.message || String(lastError || "");
+    const isOverload = errStr.includes("503") || errStr.toLowerCase().includes("high demand") || errStr.includes("UNAVAILABLE");
+    
+    const friendlyErrorMessage = isOverload
+      ? "Google yapay zeka servisi şu anda çok yoğun talep altında (503). Lütfen 2-3 saniye bekleyip 'Görseli AI ile Çözümle' butonuna tekrar basarak şansınızı deneyin. Bu yük durumu genellikle geçicidir."
+      : `Görsel analizi sırasında hata oluştu: ${errStr}. Lütfen görselin net ve okunur olduğundan emin olup tekrar deneyin.`;
+
+    return res.status(500).json({ error: friendlyErrorMessage });
   } catch (error: any) {
-    console.error("Gemini parse error on Vercel:", error);
-    return res.status(500).json({ error: error.message || "Görsel analizi sırasında bir hata oluştu." });
+    console.error("Vercel master handler error:", error);
+    return res.status(500).json({ error: error.message || "Görsel analizi sırasında genel bir hata oluştu." });
   }
 }
